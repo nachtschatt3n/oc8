@@ -1,0 +1,91 @@
+name: Container
+
+# Publishes the two images the home cluster deploys. Upstream oc8-ai/oc8 has no
+# CI and no tags, so nothing is ever published there; this fork exists to
+# produce a pinnable artifact. Images are tagged sha-<short> and bumped by hand
+# in the cluster repo (same pattern as pellet-price-monitor).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/oc8-backend
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+      # Stage 1: upstream image, unmodified, context ./backend as its
+      # Dockerfile declares. Loaded locally, not pushed.
+      - name: Build upstream backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./Dockerfile.backend
+          platforms: linux/amd64
+          load: true
+          tags: oc8-backend-base:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      # Stage 2: add capas/ + i18n/ from the repo root, then push.
+      - name: Add capas + i18n and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.oc8home-backend
+          build-args: BASE_IMAGE=oc8-backend-base:ci
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/oc8-frontend
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+      # VITE_API_URL is left at its default (/api/v1, relative), so one image
+      # serves any hostname with no rebuild and no CORS.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          provenance: false

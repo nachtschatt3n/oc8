@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+#
+# Home-cluster layer over the upstream backend image.
+#
+# WHY THIS EXISTS: Dockerfile.backend builds with context ./backend, so it
+# cannot see the repo-root `capas/` (tool packs) or `i18n/` (core UI
+# translation catalogs) trees. Both are resolved at RUNTIME as paths relative
+# to the working directory -- OC8_CAPAS_PATH=/app/capas and
+# core_i18n_path="i18n" -> /app/i18n. The upstream Helm chart expects an
+# operator to supply capas via hostPath or a pre-populated PVC; neither is
+# available on Talos (no node filesystem to bind, and a PVC would need its own
+# populate job for 6 MB of static files). Baking them into the image we already
+# own is simpler and makes the image self-contained.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY capas /app/capas
+COPY i18n /app/i18n
