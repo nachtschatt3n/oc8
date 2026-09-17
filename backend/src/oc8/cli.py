@@ -214,12 +214,34 @@ def main() -> None:
             # which sets OC8_SANDBOX_DRIVER=provisioner, but NOT of the Helm
             # chart, which sets it nowhere -- so the chart falls back to
             # "docker". That inconsistency is the root cause.
-            try:
-                await get_sandbox_driver().reap_orphans()
-            except Exception:
-                logging.getLogger("oc8.cli").exception(
-                    "startup orphan reap failed; continuing without it"
-                )
+            # Attempted ONCE. get_sandbox_driver() caches its driver into a
+            # module global only on SUCCESS, so a constructor that raises is
+            # retried on every call -- which turns the housekeeping timer below
+            # into a ~50-line traceback every tick (measured: ~175k log lines a
+            # day from one pod). Fail loud once, then stop: the sweep removes
+            # containers of FINISHED agent runs, and with isolation off none can
+            # exist, so nothing that could have succeeded is being skipped.
+            reap_enabled = True
+
+            async def _reap_orphans_once_guarded(where: str) -> None:
+                nonlocal reap_enabled
+                if not reap_enabled:
+                    return
+                try:
+                    await get_sandbox_driver().reap_orphans()
+                except Exception:
+                    reap_enabled = False
+                    logging.getLogger("oc8.cli").exception(
+                        "%s orphan reap failed: no usable sandbox driver. "
+                        "Disabling the orphan sweep for the lifetime of this "
+                        "process; it will not be retried and will not be "
+                        "logged again. With OC8_AGENT_ISOLATION=false and no "
+                        "container runtime, no run container can exist, so "
+                        "there is nothing to reap.",
+                        where,
+                    )
+
+            await _reap_orphans_once_guarded("startup")
 
             # The sweeps below run on a timer rather than only at startup: a run
             # abandoned in hour two of a worker's life would otherwise stay open
@@ -236,7 +258,7 @@ def main() -> None:
                 # alive four hours later, each holding a (by then expired)
                 # run-scoped token and a gigabyte of memory on a laptop.
                 await close_abandoned_runs()
-                await get_sandbox_driver().reap_orphans()
+                await _reap_orphans_once_guarded("housekeeping")
                 # Third sweep, same timer: the evidence a finished run left on
                 # disk. Inert unless OC8_EVIDENCE_SWEEP_ENABLED is on. It lands
                 # here rather than on its own schedule because it must run
