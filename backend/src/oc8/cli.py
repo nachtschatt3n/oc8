@@ -186,7 +186,40 @@ def main() -> None:
             # HTTP instead of raising DockerException every time.
             from oc8.sandbox import get_sandbox_driver
 
-            await get_sandbox_driver().reap_orphans()
+            # FORK DIVERGENCE (nachtschatt3n/oc8): guarded, because this call
+            # is fatal on Kubernetes and kills the worker before it consumes
+            # any work.
+            #
+            # Neither sandbox driver can be constructed here. "docker" calls
+            # docker.from_env() in DockerSandboxDriver.__init__ and Talos runs
+            # containerd with no docker.sock; "provisioner" needs the
+            # runtime-provisioner service, which mounts /var/run/docker.sock
+            # itself and so cannot run here either -- and its _request() turns
+            # an unreachable URL into SandboxError, so pointing it at nothing
+            # only changes which exception kills the process.
+            #
+            # Losing this sweep costs nothing in this deployment: it removes
+            # containers belonging to FINISHED agent runs, and with
+            # OC8_AGENT_ISOLATION=false and no container runtime, no such
+            # container can ever exist. It is not a degraded mode -- there is
+            # nothing to reap -- and it is logged at exception level every
+            # time rather than passing silently.
+            #
+            # The timer path in _housekeeping() below needs no such guard:
+            # run_worker already wraps housekeeping in try/except and logs
+            # ("unhandled error in worker housekeeping"). This startup call
+            # was the only unguarded one.
+            #
+            # NOTE the upstream comment above is true of docker-compose.yml,
+            # which sets OC8_SANDBOX_DRIVER=provisioner, but NOT of the Helm
+            # chart, which sets it nowhere -- so the chart falls back to
+            # "docker". That inconsistency is the root cause.
+            try:
+                await get_sandbox_driver().reap_orphans()
+            except Exception:
+                logging.getLogger("oc8.cli").exception(
+                    "startup orphan reap failed; continuing without it"
+                )
 
             # The sweeps below run on a timer rather than only at startup: a run
             # abandoned in hour two of a worker's life would otherwise stay open
