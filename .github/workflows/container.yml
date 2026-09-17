@@ -33,29 +33,19 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=ref,event=branch
             type=ref,event=tag
-      # Stage 1: upstream image, unmodified, context ./backend as its
-      # Dockerfile declares. Loaded locally, not pushed.
-      - name: Build upstream backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          file: ./Dockerfile.backend
-          platforms: linux/amd64
-          load: true
-          tags: oc8-backend-base:ci
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
-      # Stage 2: add capas/ + i18n/ from the repo root, then push.
-      - name: Add capas + i18n and push
+      # Single build: context is the repo root so the Dockerfile can reach
+      # capas/ and i18n/ (see Dockerfile.backend's fork-divergence header).
+      - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.oc8home-backend
-          build-args: BASE_IMAGE=oc8-backend-base:ci
+          file: ./Dockerfile.backend
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
           provenance: false
 
   frontend:
