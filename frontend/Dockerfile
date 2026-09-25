@@ -17,7 +17,15 @@ RUN bun run build && \
     test -f .output/server/index.mjs && \
     grep -q '"preset": "node-server"' .output/nitro.json
 
-FROM node:22-slim AS runtime
+# Runtime needs only the node binary to run the nitro server -- not npm. The
+# stock node image bundles a global npm whose own dependency tree lags upstream
+# security fixes, so start from plain Debian and copy node alone. Same Debian
+# release as the node image so glibc matches.
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+RUN node --version
 WORKDIR /app
 COPY --from=build /app/.output ./.output
 ENV PORT=3000
